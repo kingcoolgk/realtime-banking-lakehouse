@@ -1,28 +1,47 @@
 """
 storage/s3_writer.py
 ----------------------
-Writes processed DataFrames to the S3 Lakehouse.
+Writes processed DataFrames to local filesystem (demo mode) or real AWS S3
+via s3a://, switched by config.yaml's s3.mode.
 
-Zones:
-  - Raw Zone    : every micro-batch, unfiltered, Parquet, partitioned by event_date + card_type
-  - Curated Zone: DQ-passed records only, deduplicated, partition-optimised for BI queries
+Real S3 writes need the Hadoop AWS connector on the Spark classpath:
+    spark-submit --packages org.apache.hadoop:hadoop-aws:3.3.4,\
+com.amazonaws:aws-java-sdk-bundle:1.12.262 consumer/stream_consumer.py
+
+AWS credentials are picked up from the default provider chain
+(~/.aws/credentials, env vars, or an instance/role profile) — never hardcode
+keys here.
 """
 
 import logging
+import os
 import yaml
 
 from pyspark.sql import DataFrame
-from pyspark.sql.functions import col
 
 logger = logging.getLogger(__name__)
 
 with open("config/config.yaml") as f:
     CONFIG = yaml.safe_load(f)
 
-S3_BUCKET       = CONFIG["s3"]["bucket"]
-RAW_PREFIX      = CONFIG["s3"]["raw_prefix"]
-CURATED_PREFIX  = CONFIG["s3"]["curated_prefix"]
-DQ_PREFIX       = CONFIG["s3"]["dq_prefix"]
+S3_MODE = CONFIG["s3"].get("mode", "local")
+
+if S3_MODE == "aws":
+    _bucket = CONFIG["s3"]["bucket"]
+    RAW_PREFIX = f's3a://{_bucket}/{CONFIG["s3"]["raw_prefix"]}'
+    CURATED_PREFIX = f's3a://{_bucket}/{CONFIG["s3"]["curated_prefix"]}'
+    DQ_PREFIX = f's3a://{_bucket}/{CONFIG["s3"]["dq_prefix"]}'
+else:
+    RAW_PREFIX = CONFIG["s3"]["raw_prefix"]
+    CURATED_PREFIX = CONFIG["s3"]["curated_prefix"]
+    DQ_PREFIX = CONFIG["s3"]["dq_prefix"]
+
+    # Local demo mode only — real S3 prefixes don't exist on the local filesystem.
+    os.makedirs(RAW_PREFIX, exist_ok=True)
+    os.makedirs(CURATED_PREFIX, exist_ok=True)
+    os.makedirs(DQ_PREFIX, exist_ok=True)
+
+logger.info(f"s3_writer initialised in '{S3_MODE}' mode. raw={RAW_PREFIX}")
 
 
 def write_to_raw_zone(df: DataFrame, batch_id: int):
@@ -30,7 +49,7 @@ def write_to_raw_zone(df: DataFrame, batch_id: int):
     Write all incoming records to the raw zone as an audit trail.
     Partitioned by event_date and card_type for efficient time-range scans.
     """
-    raw_path = f"s3a://{S3_BUCKET}/{RAW_PREFIX}"
+    raw_path = RAW_PREFIX
 
     try:
         (
@@ -51,7 +70,7 @@ def write_to_curated_zone(df: DataFrame, batch_id: int):
     Deduplication on transaction_id ensures idempotent micro-batch writes.
     Partitioned by event_date + category_group for BI query optimisation.
     """
-    curated_path = f"s3a://{S3_BUCKET}/{CURATED_PREFIX}"
+    curated_path = CURATED_PREFIX
 
     # Deduplicate within the batch on transaction_id
     deduped_df = df.dropDuplicates(["transaction_id"])
@@ -74,12 +93,15 @@ def write_dq_report(report: dict, batch_id: int, spark):
     Persist the DQ report dict as a single-row JSON Parquet for audit/monitoring.
     """
     import json
-    dq_path  = f"s3a://{S3_BUCKET}/{DQ_PREFIX}"
-    rdd      = spark.sparkContext.parallelize([json.dumps(report)])
-    dq_df    = spark.read.json(rdd)
+
+    dq_path = DQ_PREFIX
+    rdd = spark.sparkContext.parallelize([json.dumps(report)])
+    dq_df = spark.read.json(rdd)
 
     try:
         dq_df.write.mode("append").parquet(dq_path)
         logger.info(f"Batch {batch_id} | DQ report written → {dq_path}")
     except Exception as e:
-        logger.warning(f"Batch {batch_id} | DQ report write failed (non-critical): {e}")
+        logger.warning(
+            f"Batch {batch_id} | DQ report write failed (non-critical): {e}"
+        )

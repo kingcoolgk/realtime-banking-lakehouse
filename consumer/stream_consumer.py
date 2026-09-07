@@ -14,6 +14,7 @@ Run:
 import sys
 import yaml
 import logging
+from dotenv import load_dotenv
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
@@ -24,7 +25,12 @@ sys.path.append(".")
 from producer.transaction_schema import TRANSACTION_SCHEMA
 from consumer.transformations import apply_transformations
 from dq.dq_checks import run_dq_checks
-from storage.s3_writer import write_to_raw_zone, write_to_curated_zone
+from storage.s3_writer import (
+    write_to_raw_zone,
+    write_to_curated_zone,
+    write_dq_report,
+)
+load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,13 +49,28 @@ TRIGGER_INTERVAL = CONFIG["spark"]["trigger_interval"]   # e.g. "30 seconds"
 
 
 def create_spark_session() -> SparkSession:
-    return (
+    builder = (
         SparkSession.builder
         .appName("RealtimeBankingPipeline")
         .config("spark.sql.shuffle.partitions", "4")
         .config("spark.streaming.stopGracefullyOnShutdown", "true")
-        .getOrCreate()
     )
+
+    # AWS S3A authentication for AWS mode.
+    if CONFIG["s3"]["mode"].lower() == "aws":
+        builder = (
+            builder
+            .config(
+                "spark.hadoop.fs.s3a.aws.credentials.provider",
+                "com.amazonaws.auth.profile.ProfileCredentialsProvider"
+            )
+            .config(
+                "spark.hadoop.fs.s3a.endpoint.region",
+                CONFIG["s3"]["region"]
+            )
+        )
+
+    return builder.getOrCreate()
 
 
 def process_batch(batch_df, batch_id: int):
@@ -72,6 +93,8 @@ def process_batch(batch_df, batch_id: int):
 
     # 3. Run DQ checks — returns (passed_df, dq_report_dict)
     passed_df, dq_report = run_dq_checks(transformed_df, batch_id)
+    # 3b. Persist DQ report for audit/monitoring
+    write_dq_report(dq_report, batch_id, batch_df.sparkSession)
 
     if dq_report["batch_passed"]:
         # 4. Write DQ-passed records to curated zone

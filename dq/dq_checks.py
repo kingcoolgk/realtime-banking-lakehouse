@@ -35,7 +35,7 @@ def check_schema_drift(df: DataFrame, batch_id: int) -> Dict[str, Any]:
     missing_fields  = EXPECTED_FIELDS - actual_fields
     extra_fields    = actual_fields - EXPECTED_FIELDS
 
-    passed  = len(missing_fields) == 0
+    passed = len(missing_fields) == 0 and len(extra_fields) == 0
     result  = {
         "check":           "schema_drift",
         "passed":          passed,
