@@ -49,11 +49,20 @@ def send_dq_alert(batch_id: int, alert_type: str,
 
     slack_message = log_msg  # overwritten with the agent's summary if diagnosis succeeds
 
-    if severity in AGENT_SEVERITIES:
+    # Agentic diagnosis is handled by the Airflow failure branch.
+# Keep Spark DQ processing independent of external LLM API calls.
+    if (
+        severity in AGENT_SEVERITIES
+        and os.getenv("INLINE_AGENTIC_DQ", "false").lower() == "true"
+    ):
         diagnosis = agentic_diagnosis.diagnose(batch_id, alert_type, details)
         if diagnosis:
-            logger.info(f"Batch {batch_id} | Agent diagnosis: {json.dumps(diagnosis)}")
-            slack_message = agentic_diagnosis.format_for_slack(batch_id, alert_type, diagnosis)
+            logger.info(
+                f"Batch {batch_id} | Agent diagnosis: {json.dumps(diagnosis)}"
+            )
+            slack_message = agentic_diagnosis.format_for_slack(
+                batch_id, alert_type, diagnosis
+            )
             alert_payload["diagnosis"] = diagnosis
 
     # ── Extension point ───────────────────────────────────────────────────────

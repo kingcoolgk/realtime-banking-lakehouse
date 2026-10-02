@@ -28,6 +28,12 @@ airflow/logs/
 secrets.yaml
 credentials
 
+# Terraform
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.backup
+terraform/terraform.tfvars
+
 # IDE
 .idea/
 .vscode/

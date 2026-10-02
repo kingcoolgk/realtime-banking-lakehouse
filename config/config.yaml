@@ -4,7 +4,7 @@
 # Override values via environment variables in production.
 
 kafka:
-  broker: "localhost:9092"
+  broker: "kafka:29092"
   topic:  "txn_events"
   group_id: "banking-pipeline-consumer-group"
   partitions: 3
@@ -22,12 +22,31 @@ spark:
   watermark_delay: "5 minutes"
 
 s3:
-  bucket: "your-s3-bucket-name"
+  mode: "aws"          # "local" (demo mode, default) | "aws" (real S3 via s3a://)
+  bucket: "banking-pipeline-lakehouse-gkumar-2026"        # set to the real bucket name from `terraform output s3_bucket_name` when mode is "aws"
+  region: "ap-south-1"
   raw_prefix:     "banking/raw"
   curated_prefix: "banking/curated"
   dq_prefix:      "banking/dq_reports"
+  quarantine_prefix: "banking/quarantine"
 
 dq:
   null_rate_threshold: 0.02     # 2% max null rate for critical fields
   anomaly_zscore_cutoff: 4.0    # Z-score threshold for amount anomaly flagging
   min_records_for_stats: 30     # minimum records required to run anomaly check
+
+agent:
+  enabled: true                          # requires ANTHROPIC_API_KEY env var; degrades to plain logging if unset
+  model: "claude-haiku-4-5-20251001"
+
+glue:
+  database: "banking_pipeline_db"
+  curated_table: "curated_transactions"
+  job_name: "banking-pipeline-curate-transactions"
+
+athena:
+  workgroup: "banking-pipeline-workgroup"
+
+redshift:
+  workgroup: "banking-pipeline-wg"
+  database: "bankingdb"

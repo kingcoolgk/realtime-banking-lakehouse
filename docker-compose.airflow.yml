@@ -1,0 +1,73 @@
+services:
+  postgres:
+    image: postgres:15
+    container_name: airflow-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  airflow:
+    image: apache/airflow:2.8.1-python3.11
+    container_name: airflow
+    restart: unless-stopped
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    ports:
+      - "8081:8080"
+
+    environment:
+      #AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "False"
+      AIRFLOW__CORE__DEFAULT_TIMEZONE: Asia/Kolkata
+
+      AIRFLOW_CONN_AWS_DEFAULT: aws://?region_name=ap-south-1
+
+      AWS_PROFILE: default
+      AWS_CONFIG_FILE: /home/airflow/.aws/config
+      AWS_SHARED_CREDENTIALS_FILE: /home/airflow/.aws/credentials
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+
+      _PIP_ADDITIONAL_REQUIREMENTS: >
+        apache-airflow-providers-amazon==8.25.0
+        kafka-python
+        PyYAML
+        anthropic==0.39.0
+
+    volumes:
+      - airflow_home:/opt/airflow
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./dags:/opt/airflow/dags
+      - ./config:/opt/airflow/config:ro
+      - ./producer:/opt/airflow/producer:ro
+      - ./consumer:/opt/airflow/consumer:ro
+      - ./dq:/opt/airflow/dq:ro
+      - ${USERPROFILE}/.aws:/home/airflow/.aws:ro
+
+    command: >
+      bash -c
+      "airflow db migrate &&
+       airflow standalone"
+
+
+volumes:
+  airflow_home:
+  postgres_data:

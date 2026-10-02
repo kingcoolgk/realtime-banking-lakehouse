@@ -21,43 +21,82 @@ Built as a personal portfolio project to demonstrate skills aligned with modern 
 ## 🏗️ Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                    REAL-TIME BANKING TRANSACTION PIPELINE                │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                         │
-│  [Transaction         [Apache Kafka]      [PySpark Structured           │
-│   Simulator]   ──►   Topic: txn_events ──► Streaming Consumer]         │
-│  (producer.py)        Partitions: 3        Transformations              │
-│                                            Enrichment                   │
-│                              │                     │                    │
-│                              ▼                     ▼                    │
-│                      [DQ Check Layer]      [AWS S3 Lakehouse]           │
-│                      - Schema Drift        - Raw Zone   (Parquet)       │
-│                      - Null Breaches       - Curated Zone (Delta-like)  │
-│                      - Anomaly Flags       - Partitioned by date/type   │
-│                              │                     │                    │
-│                              ▼                     ▼                    │
-│                      [Airflow DAG]         [Power BI Dashboard]         │
-│                      Orchestration         Reporting Layer              │
-│                      Alerting / Retry      40% faster queries           │
-│                                                                         │
-└─────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────┐
+│                 REAL-TIME BANKING TRANSACTION PIPELINE               │
+└──────────────────────────────────────────────────────────────────────┘
+
+Kafka / Transaction Simulator
+            │
+            ▼
+┌──────────────────────────────┐
+│ PySpark Structured Streaming │
+│ • transformations            │
+│ • enrichment                 │
+└──────────────┬───────────────┘
+               │
+       ┌───────┴────────┐
+       │                │
+       ▼                ▼
+┌──────────────┐   ┌──────────────┐
+│ AWS S3 Raw   │   │ DQ Check     │
+│ Zone         │   │ • Schema     │
+│ Parquet      │   │ • Null rate  │
+│ All records  │   │ • Anomaly    │
+└──────────────┘   └──────┬───────┘
+                          │
+                  ┌───────┴────────┐
+                  │                │
+                 PASS             FAIL
+                  │                │
+                  ▼                ▼
+        ┌──────────────────┐  ┌────────────────────┐
+        │ AWS Glue ETL     │  │ Claude Agent       │
+        │ + Data Catalog   │  │ • Diagnose failure │
+        └────────┬─────────┘  │ • Root cause       │
+                 │            │ • Suggested action │
+                 ▼            └─────────┬──────────┘
+        ┌──────────────────┐             │
+        │ Apache Iceberg   │             ▼
+        │ Curated Table    │      Slack / Alert
+        └────────┬─────────┘             │
+                 │                       ▼
+          ┌──────┴──────┐          Quarantine
+          ▼             ▼
+       Athena     Redshift Serverless*
+          │             │
+          └──────┬──────┘
+                 ▼
+           Power BI / BI
+
+Airflow → orchestrates pipeline tasks, Glue execution,
+          and the DQ-failure branch
+
+Terraform → provisions AWS infrastructure
+
+* Optional; disabled by default for cost control.
+
 ```
 
 ---
 
 ## 🛠️ Tech Stack
 
-| Layer              | Technology                        |
-|--------------------|-----------------------------------|
-| Event Ingestion    | Apache Kafka 3.5 (3 partitions)   |
-| Stream Processing  | PySpark Structured Streaming 3.4  |
-| Orchestration      | Apache Airflow 2.8                |
-| Data Quality       | Custom DQ Framework (PySpark)     |
-| Storage            | AWS S3 (Lakehouse, Parquet)       |
-| Reporting          | Power BI                          |
-| Language           | Python 3.10                       |
-| Infrastructure     | Docker Compose (local dev)        |
+| Layer               | Technology                        |
+|---------------------|-----------------------------------|
+| Event Ingestion     | Apache Kafka 3.5 (3 partitions)   |
+| Stream Processing   | PySpark Structured Streaming 3.4  |
+| Orchestration       | Apache Airflow 2.8                |
+| Data Quality        | Custom DQ Framework (PySpark)     |
+| Storage             | AWS S3 Lakehouse (Raw + Curated)  |
+| Table Format        | Apache Iceberg                    |
+| Data Catalog / ETL  | AWS Glue                          |
+| Query Layer         | Amazon Athena                     |
+| Optional Warehouse  | Amazon Redshift Serverless        |
+| Agentic DQ          | Claude API (Haiku)                |
+| Infrastructure      | Terraform + Docker Compose        |
+| Reporting           | Power BI                          |
+| Language            | Python 3.10                       |
 
 ---
 

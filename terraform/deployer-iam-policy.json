@@ -1,0 +1,36 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "S3Lakehouse",
+      "Effect": "Allow",
+      "Action": ["s3:*"],
+      "Resource": ["arn:aws:s3:::banking-pipeline-*", "arn:aws:s3:::banking-pipeline-*/*"]
+    },
+    {
+      "Sid": "GlueCatalogAndJobs",
+      "Effect": "Allow",
+      "Action": ["glue:*"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "Athena",
+      "Effect": "Allow",
+      "Action": ["athena:*"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "RedshiftServerless",
+      "Effect": "Allow",
+      "Action": ["redshift-serverless:*"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "IamPassRoleForGlueAndRedshift",
+      "Effect": "Allow",
+      "Action": ["iam:CreateRole", "iam:DeleteRole", "iam:AttachRolePolicy", "iam:DetachRolePolicy",
+                 "iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:GetRole", "iam:PassRole", "iam:TagRole"],
+      "Resource": ["arn:aws:iam::*:role/banking-pipeline-*"]
+    }
+  ]
+}

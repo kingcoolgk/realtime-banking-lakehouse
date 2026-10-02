@@ -1,0 +1,10 @@
+# Copy this file to terraform.tfvars and fill in real values.
+# terraform.tfvars is gitignored — never commit real secrets.
+
+aws_region   = "ap-south-1"
+bucket_name  = "banking-pipeline-lakehouse-CHANGE-ME-2026"   # must be globally unique
+enable_redshift = false   # keep false until you're ready for the Redshift screenshot step
+
+# Better: leave this out of the file entirely and set it via
+#   export TF_VAR_redshift_admin_password="your-strong-password"
+# redshift_admin_password = "your-strong-password"

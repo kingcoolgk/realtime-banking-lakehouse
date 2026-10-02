@@ -5,7 +5,7 @@ Writes processed DataFrames to local filesystem (demo mode) or real AWS S3
 via s3a://, switched by config.yaml's s3.mode.
 
 Real S3 writes need the Hadoop AWS connector on the Spark classpath:
-    spark-submit --packages org.apache.hadoop:hadoop-aws:3.3.4,\
+    spark-submit --packages org.apache.hadoop:hadoop-aws:3.3.4,
 com.amazonaws:aws-java-sdk-bundle:1.12.262 consumer/stream_consumer.py
 
 AWS credentials are picked up from the default provider chain
@@ -63,6 +63,44 @@ def write_to_raw_zone(df: DataFrame, batch_id: int):
         logger.error(f"Batch {batch_id} | Raw zone write FAILED: {e}")
         raise
 
+
+def write_to_quarantine_zone(df: DataFrame, batch_id: int, reason: str):
+    """
+    Write a failed DQ batch to an isolated quarantine prefix.
+
+    Each Spark micro-batch gets its own batch-specific prefix so the exact
+    failed batch can be identified and reviewed independently.
+    """
+    quarantine_prefix = CONFIG["s3"]["quarantine_prefix"]
+
+    if S3_MODE == "aws":
+        quarantine_path = (
+            f"s3a://{_bucket}/{quarantine_prefix}/"
+            f"batch_id={batch_id}/reason={reason}"
+        )
+    else:
+        quarantine_path = (
+            f"{quarantine_prefix}/"
+            f"batch_id={batch_id}/reason={reason}"
+        )
+
+    try:
+        (
+            df.write
+            .mode("overwrite")
+            .partitionBy("event_date", "card_type")
+            .parquet(quarantine_path)
+        )
+
+        logger.info(
+            f"Batch {batch_id} | Quarantine write SUCCESS → {quarantine_path}"
+        )
+
+    except Exception as e:
+        logger.error(
+            f"Batch {batch_id} | Quarantine write FAILED: {e}"
+        )
+        raise
 
 def write_to_curated_zone(df: DataFrame, batch_id: int):
     """

@@ -1,83 +1,114 @@
 """
 consumer/transformations.py
 -----------------------------
-Business transformation and feature engineering logic
-applied to each micro-batch before DQ and storage.
+Business transformation and feature engineering logic.
+
+Transformations:
+    - risk_score
+    - risk_label
+    - category_group
+    - amount_bucket
+    - is_high_value
+    - amount rounding
+
+Implementation uses native Spark SQL expressions instead of Python UDFs.
 """
 
 from pyspark.sql import DataFrame
 from pyspark.sql.functions import (
-    col, when, lit, udf, round as spark_round
+    col,
+    lit,
+    when,
+    round as spark_round,
+    create_map,
 )
-from pyspark.sql.types import StringType, DoubleType
 
 
-# ── Risk Score UDF ────────────────────────────────────────────────────────────
-def compute_risk_score(amount: float, is_international: bool,
-                        status: str, merchant_category: str) -> float:
-    """
-    Heuristic risk scoring (0.0 - 1.0).
-    Production version would use a trained ML model.
-    """
-    score = 0.0
-    if amount and amount > 50000:
-        score += 0.4
-    elif amount and amount > 20000:
-        score += 0.2
-    if is_international:
-        score += 0.3
-    if status == "FAILED":
-        score += 0.2
-    if merchant_category in ("TRAVEL", "ECOMMERCE"):
-        score += 0.1
-    return min(round(score, 2), 1.0)
+# ---------------------------------------------------------------------------
+# Business rules
+# ---------------------------------------------------------------------------
 
-
-risk_score_udf = udf(compute_risk_score, DoubleType())
-
-
-# ── Merchant Category Normaliser ──────────────────────────────────────────────
 CATEGORY_MAP = {
-    "GROCERY":       "ESSENTIAL",
-    "UTILITIES":     "ESSENTIAL",
-    "HEALTHCARE":    "ESSENTIAL",
-    "FUEL":          "TRANSPORT",
-    "TRAVEL":        "TRANSPORT",
-    "RESTAURANT":    "LIFESTYLE",
+    "GROCERY": "ESSENTIAL",
+    "UTILITIES": "ESSENTIAL",
+    "HEALTHCARE": "ESSENTIAL",
+    "FUEL": "TRANSPORT",
+    "TRAVEL": "TRANSPORT",
+    "RESTAURANT": "LIFESTYLE",
     "ENTERTAINMENT": "LIFESTYLE",
-    "ECOMMERCE":     "DIGITAL",
+    "ECOMMERCE": "DIGITAL",
 }
 
 
-def normalise_category(cat: str) -> str:
-    return CATEGORY_MAP.get(cat, "OTHER") if cat else "OTHER"
+# ---------------------------------------------------------------------------
+# Main transformation
+# ---------------------------------------------------------------------------
 
-
-normalise_cat_udf = udf(normalise_category, StringType())
-
-
-# ── Main Transformation Function ──────────────────────────────────────────────
 def apply_transformations(df: DataFrame) -> DataFrame:
     """
-    Apply all enrichments and derived columns to the raw parsed DataFrame.
+    Apply business transformations and feature engineering.
 
-    Columns added:
-        - risk_score          : float 0–1 heuristic fraud risk
-        - risk_label          : LOW / MEDIUM / HIGH
-        - category_group      : normalised merchant category bucket
-        - amount_bucket       : binned transaction amount range
-        - is_high_value       : boolean flag for amounts > 50,000 INR
+    Added columns:
+        risk_score
+        risk_label
+        category_group
+        amount_bucket
+        is_high_value
     """
+
+    # ------------------------------------------------------------------
+    # 1. Risk score
+    #
+    # Amount contribution:
+    #   > 50,000 INR  -> +0.40
+    #   > 20,000 INR  -> +0.20
+    #
+    # Other signals:
+    #   international -> +0.30
+    #   failed        -> +0.20
+    #   travel/ecommerce -> +0.10
+    # ------------------------------------------------------------------
+
+    amount_risk = (
+        when(col("amount") > 50000, lit(0.40))
+        .when(col("amount") > 20000, lit(0.20))
+        .otherwise(lit(0.0))
+    )
+
+    international_risk = when(
+        col("is_international") == True,
+        lit(0.30)
+    ).otherwise(lit(0.0))
+
+    status_risk = when(
+        col("status") == "FAILED",
+        lit(0.20)
+    ).otherwise(lit(0.0))
+
+    category_risk = when(
+        col("merchant_category").isin("TRAVEL", "ECOMMERCE"),
+        lit(0.10)
+    ).otherwise(lit(0.0))
+
+    risk_score = (
+        amount_risk
+        + international_risk
+        + status_risk
+        + category_risk
+    )
 
     df = df.withColumn(
         "risk_score",
-        risk_score_udf(
-            col("amount"),
-            col("is_international"),
-            col("status"),
-            col("merchant_category")
+        spark_round(
+            when(risk_score > 1.0, lit(1.0))
+            .otherwise(risk_score),
+            2
         )
     )
+
+    # ------------------------------------------------------------------
+    # 2. Risk label
+    # ------------------------------------------------------------------
 
     df = df.withColumn(
         "risk_label",
@@ -86,24 +117,58 @@ def apply_transformations(df: DataFrame) -> DataFrame:
         .otherwise(lit("LOW"))
     )
 
-    df = df.withColumn(
-        "category_group",
-        normalise_cat_udf(col("merchant_category"))
+    # ------------------------------------------------------------------
+    # 3. Merchant category normalization
+    # ------------------------------------------------------------------
+
+    category_mapping = create_map(
+        *[
+            item
+            for pair in CATEGORY_MAP.items()
+            for item in (lit(pair[0]), lit(pair[1]))
+        ]
     )
 
     df = df.withColumn(
+        "category_group",
+        when(
+            col("merchant_category").isNull(),
+            lit("OTHER")
+        )
+        .otherwise(
+            category_mapping.getItem(col("merchant_category"))
+        )
+    )
+
+    df = df.fillna(
+        {"category_group": "OTHER"}
+    )
+
+    # ------------------------------------------------------------------
+    # 4. Transaction amount bucket
+    # ------------------------------------------------------------------
+
+    df = df.withColumn(
         "amount_bucket",
-        when(col("amount") < 500,   lit("MICRO"))
-        .when(col("amount") < 5000,  lit("SMALL"))
+        when(col("amount") < 500, lit("MICRO"))
+        .when(col("amount") < 5000, lit("SMALL"))
         .when(col("amount") < 20000, lit("MEDIUM"))
         .when(col("amount") < 50000, lit("LARGE"))
         .otherwise(lit("HIGH_VALUE"))
     )
 
+    # ------------------------------------------------------------------
+    # 5. High-value transaction flag
+    # ------------------------------------------------------------------
+
     df = df.withColumn(
         "is_high_value",
         col("amount") > 50000
     )
+
+    # ------------------------------------------------------------------
+    # 6. Monetary precision
+    # ------------------------------------------------------------------
 
     df = df.withColumn(
         "amount",

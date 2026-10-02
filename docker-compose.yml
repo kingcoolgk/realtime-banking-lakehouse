@@ -26,7 +26,9 @@ services:
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       KAFKA_NUM_PARTITIONS: 3
@@ -46,5 +48,29 @@ services:
       - "8080:8080"
     environment:
       KAFKA_CLUSTERS_0_NAME: local
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
       KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+
+  spark:
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
+    container_name: spark
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      - SPARK_MODE=master
+      - AWS_PROFILE=default
+      - AWS_CONFIG_FILE=/home/spark/.aws/config
+      - AWS_SHARED_CREDENTIALS_FILE=/home/spark/.aws/credentials
+      - HOME=/home/spark
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    command: ["tail", "-f", "/dev/null"]
+    volumes:
+      - ./consumer:/opt/bitnami/spark/consumer
+      - ./config:/opt/bitnami/spark/config
+      - ./storage:/opt/bitnami/spark/storage
+      - ./dq:/opt/bitnami/spark/dq
+      - ./producer:/opt/bitnami/spark/producer
+      - ${USERPROFILE}/.aws:/home/spark/.aws:ro
